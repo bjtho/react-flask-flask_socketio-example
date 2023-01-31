@@ -3,14 +3,17 @@ SocketIO Implementation + entrypoint.
 '''
 
 PORT = 9999 # Both flask, and socketio will listen on this port.
-TIMEOUT = 5 # Timeout for the subprocess function.
+TIMEOUT = 1 # Timeout for the subprocess function.
 
 # hello again monkey
 import eventlet
 eventlet.monkey_patch()
 
-from app import socketio, react_app
 
+from app import socketio, react_app
+from flask import request
+
+msg_q = eventlet.Queue()
 # do your server route stuff here.
 @socketio.on('connect')
 def handle_connect(*args):
@@ -22,6 +25,12 @@ def handle_connect(*args):
 def handle_disconnect(*args):
     # do disconnection things.
     print("Client is disconnected.")
+    
+@socketio.on('my_topic')
+def handle_my_topic(data):
+    # note, not a great idea to use the sid as its ephemeral.
+    q_item = {'sid': request.sid, 'msg': data.get('msg') or ''}
+    msg_q.put(q_item)
 
 emit_process_spawned = False
 
@@ -37,19 +46,25 @@ def emit_event_periodically(n):
     
     emit_process_spawned = True
     
-    counter = 0
+
     
     while True:
         # do stuff.
-        socketio.emit('my_topic', {'counter': counter})
-        counter+=1
-        socketio.sleep(n)
+        if not msg_q.empty():
+            msg = msg_q.get()
+            print(msg['sid'], msg['msg'])
+            socketio.emit('other_topic', {'data': f"Hello {msg['sid']}, thanks for your message."})
+        
+        # you need to let the thread sleep in order to give up control and handle other things as we are using 'green threads'.
+        # This may not scale super well, and I am not sure what the minimum amount of time can be to sleep a thread.
+        eventlet.sleep(n)
 
 # Normal, windows 10 compatable runtime. This is what I use for development because it's a PITA
 # to constantly build to Docker for every little change.
 def start_server():
+    # spawn your subprocess..
     eventlet.spawn(emit_event_periodically, TIMEOUT)
-     # emit event every 10 seconds
+
     print(f"Starting server on {PORT}"),
     socketio.run(react_app, port=PORT, debug=False)
     return
